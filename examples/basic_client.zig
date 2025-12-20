@@ -1,5 +1,5 @@
 const std = @import("std");
-const GrpcClient = @import("../src/client.zig").GrpcClient;
+const GrpcClient = @import("client").GrpcClient;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

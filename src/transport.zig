@@ -1,5 +1,7 @@
 const std = @import("std");
 const net = std.net;
+const ArrayList = std.array_list.Managed;
+const compression = @import("features/compression.zig");
 const http2 = struct {
     pub const connection = @import("http2/connection.zig");
     pub const frame = @import("http2/frame.zig");
@@ -12,6 +14,23 @@ pub const TransportError = error{
     PayloadTooLarge,
     CompressionNotSupported,
     Http2Error,
+};
+
+pub const Message = struct {
+    allocator: std.mem.Allocator,
+    headers: std.StringHashMap([]const u8),
+    data: []const u8,
+    compression_algorithm: compression.Compression.Algorithm,
+
+    pub fn deinit(self: *Message) void {
+        var it = self.headers.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.headers.deinit();
+        self.allocator.free(self.data);
+    }
 };
 
 pub const Transport = struct {
@@ -37,6 +56,91 @@ pub const Transport = struct {
         return transport;
     }
 
+    fn serializeMessage(self: *Transport, headers: *const std.StringHashMap([]const u8), data: []const u8, compression_alg: compression.Compression.Algorithm) ![]u8 {
+        var buffer = ArrayList(u8).init(self.allocator);
+        errdefer buffer.deinit();
+
+        try buffer.append(@intFromEnum(compression_alg));
+
+        const header_count: u16 = @intCast(headers.count());
+        try buffer.writer().writeInt(u16, header_count, .big);
+
+        var it = headers.iterator();
+        while (it.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+
+            try buffer.writer().writeInt(u16, @intCast(name.len), .big);
+            try buffer.writer().writeInt(u16, @intCast(value.len), .big);
+            try buffer.appendSlice(name);
+            try buffer.appendSlice(value);
+        }
+
+        try buffer.writer().writeInt(u32, @intCast(data.len), .big);
+        try buffer.appendSlice(data);
+
+        return buffer.toOwnedSlice();
+    }
+
+    fn deserializeMessage(self: *Transport, payload: []const u8) !Message {
+        var index: usize = 0;
+        if (payload.len < 1 + 2 + 4) return TransportError.InvalidHeader;
+
+        const compression_tag: u8 = payload[index];
+        index += 1;
+
+        const headers_len = (@as(u16, payload[index]) << 8) | payload[index + 1];
+        index += 2;
+
+        var headers = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer {
+            var cleanup_it = headers.iterator();
+            while (cleanup_it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            headers.deinit();
+        }
+
+        for (0..headers_len) |_| {
+            if (index + 4 > payload.len) return TransportError.InvalidHeader;
+            const name_len = (@as(u16, payload[index]) << 8) | payload[index + 1];
+            const value_len = (@as(u16, payload[index + 2]) << 8) | payload[index + 3];
+            index += 4;
+
+            if (index + name_len + value_len > payload.len) return TransportError.InvalidHeader;
+
+            const name = payload[index .. index + name_len];
+            index += name_len;
+            const value = payload[index .. index + value_len];
+            index += value_len;
+
+            const name_copy = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(name_copy);
+            const value_copy = try self.allocator.dupe(u8, value);
+            errdefer self.allocator.free(value_copy);
+
+            try headers.put(name_copy, value_copy);
+        }
+
+        if (index + 4 > payload.len) return TransportError.InvalidHeader;
+        const data_len = (@as(u32, payload[index]) << 24) |
+            (@as(u32, payload[index + 1]) << 16) |
+            (@as(u32, payload[index + 2]) << 8) |
+            @as(u32, payload[index + 3]);
+        index += 4;
+        if (index + data_len > payload.len) return TransportError.InvalidHeader;
+
+        const data_copy = try self.allocator.dupe(u8, payload[index .. index + data_len]);
+
+        return Message{
+            .allocator = self.allocator,
+            .headers = headers,
+            .data = data_copy,
+            .compression_algorithm = @enumFromInt(compression_tag),
+        };
+    }
+
     pub fn deinit(self: *Transport) void {
         if (self.http2_conn) |*conn| {
             conn.deinit();
@@ -59,35 +163,38 @@ pub const Transport = struct {
         settings_frame.stream_id = 0;
         // Add your settings here
 
-        var writer = std.io.bufferedWriter(self.stream.writer());
-        try settings_frame.encode(writer.writer());
-        try writer.flush();
+        var writer = self.stream.writer(self.write_buf);
+        try settings_frame.encode(&writer.interface);
+        try writer.interface.flush();
     }
 
-    pub fn readMessage(self: *Transport) ![]const u8 {
-        var frame_reader = std.io.bufferedReader(self.stream.reader());
-        const frame = try http2.frame.Frame.decode(frame_reader.reader(), self.allocator);
+    pub fn readMessage(self: *Transport) !Message {
+        var reader = self.stream.reader(self.read_buf);
+        var frame = try http2.frame.Frame.decode(reader.interface(), self.allocator);
         defer frame.deinit(self.allocator);
 
         if (frame.type == .DATA) {
-            return try self.allocator.dupe(u8, frame.payload);
+            return try self.deserializeMessage(frame.payload);
         }
 
         return TransportError.Http2Error;
     }
 
-    pub fn writeMessage(self: *Transport, message: []const u8) !void {
+    pub fn writeMessage(self: *Transport, headers: *const std.StringHashMap([]const u8), message: []const u8, compression_alg: compression.Compression.Algorithm) !void {
         var data_frame = try http2.frame.Frame.init(self.allocator);
         defer data_frame.deinit(self.allocator);
+
+        const encoded = try self.serializeMessage(headers, message, compression_alg);
+        defer self.allocator.free(encoded);
 
         data_frame.type = .DATA;
         data_frame.flags = http2.frame.FrameFlags.END_STREAM;
         data_frame.stream_id = 1; // Use appropriate stream ID
-        data_frame.payload = message;
-        data_frame.length = @intCast(message.len);
+        data_frame.payload = encoded;
+        data_frame.length = @intCast(encoded.len);
 
-        var writer = std.io.bufferedWriter(self.stream.writer());
-        try data_frame.encode(writer.writer());
-        try writer.flush();
+        var writer = self.stream.writer(self.write_buf);
+        try data_frame.encode(&writer.interface);
+        try writer.interface.flush();
     }
 };

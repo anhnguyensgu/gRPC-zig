@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArrayList = std.array_list.Managed;
 
 pub const HpackError = error{
     InvalidIndex,
@@ -7,12 +8,12 @@ pub const HpackError = error{
 };
 
 pub const Encoder = struct {
-    dynamic_table: std.ArrayList(HeaderField),
+    dynamic_table: ArrayList(HeaderField),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Encoder {
         return Encoder{
-            .dynamic_table = std.ArrayList(HeaderField).init(allocator),
+            .dynamic_table = ArrayList(HeaderField).init(allocator),
             .allocator = allocator,
         };
     }
@@ -26,37 +27,37 @@ pub const Encoder = struct {
     }
 
     pub fn encode(self: *Encoder, headers: std.StringHashMap([]const u8)) ![]u8 {
-        var buffer = std.ArrayList(u8).init(self.allocator);
+        var buffer = ArrayList(u8).init(self.allocator);
         errdefer buffer.deinit();
 
         var it = headers.iterator();
         while (it.next()) |entry| {
-            try self.encodeField(&buffer, entry.key_ptr.*, entry.value_ptr.*);
+            try encodeField(&buffer, entry.key_ptr.*, entry.value_ptr.*);
         }
 
         return buffer.toOwnedSlice();
     }
 
-    fn encodeField(self: *Encoder, buffer: *std.ArrayList(u8), name: []const u8, value: []const u8) !void {
+    fn encodeField(buffer: *ArrayList(u8), name: []const u8, value: []const u8) !void {
         // Simple literal header field encoding
         try buffer.append(0x0); // New name
-        try self.encodeString(buffer, name);
-        try self.encodeString(buffer, value);
+        try encodeString(buffer, name);
+        try encodeString(buffer, value);
     }
 
-    fn encodeString(self: *Encoder, buffer: *std.ArrayList(u8), str: []const u8) !void {
+    fn encodeString(buffer: *ArrayList(u8), str: []const u8) !void {
         try buffer.append(@intCast(str.len));
         try buffer.appendSlice(str);
     }
 };
 
 pub const Decoder = struct {
-    dynamic_table: std.ArrayList(HeaderField),
+    dynamic_table: ArrayList(HeaderField),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Decoder {
         return Decoder{
-            .dynamic_table = std.ArrayList(HeaderField).init(allocator),
+            .dynamic_table = ArrayList(HeaderField).init(allocator),
             .allocator = allocator,
         };
     }
@@ -84,7 +85,6 @@ pub const Decoder = struct {
     }
 
     fn decodeField(self: *Decoder, encoded: []const u8) !HeaderField {
-        _ = self;
         if (encoded[0] == 0x0) {
             // Literal header field
             const name_len = encoded[1];

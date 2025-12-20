@@ -1,7 +1,8 @@
 const std = @import("std");
+const ArrayList = std.array_list.Managed;
 const GrpcClient = @import("client.zig").GrpcClient;
-const GrpcServer = @import("server.zig").GrpcServer;
 const json = std.json;
+const OutputFormat = enum { json, text };
 
 // Benchmark configuration
 const BenchmarkConfig = struct {
@@ -54,13 +55,13 @@ const Timer = struct {
 const ClientWorker = struct {
     allocator: std.mem.Allocator,
     config: BenchmarkConfig,
-    results: std.ArrayList(f64),
+    results: ArrayList(f64),
 
     fn init(allocator: std.mem.Allocator, config: BenchmarkConfig) ClientWorker {
         return ClientWorker{
             .allocator = allocator,
             .config = config,
-            .results = std.ArrayList(f64).init(allocator),
+            .results = ArrayList(f64).init(allocator),
         };
     }
 
@@ -101,7 +102,7 @@ const ClientWorker = struct {
 
     fn generatePayload(self: *ClientWorker) ![]u8 {
         const payload = try self.allocator.alloc(u8, self.config.request_size_bytes);
-        var prng = std.rand.DefaultPrng.init(@as(u64, @intCast(std.time.milliTimestamp())));
+        var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.milliTimestamp())));
         const random = prng.random();
         
         for (payload) |*byte| {
@@ -146,13 +147,13 @@ fn calculateLatencyStats(latencies: []f64) BenchmarkResults.LatencyStats {
 fn runBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !BenchmarkResults {
     std.log.info("Starting benchmark with {} concurrent clients, {} requests each", .{ config.concurrent_clients, config.num_requests });
 
-    var all_latencies = std.ArrayList(f64).init(allocator);
+    var all_latencies = ArrayList(f64).init(allocator);
     defer all_latencies.deinit();
 
     const overall_timer = Timer.start();
 
     // Create and run client workers concurrently
-    var workers = std.ArrayList(ClientWorker).init(allocator);
+    var workers = ArrayList(ClientWorker).init(allocator);
     defer {
         for (workers.items) |*worker| {
             worker.deinit();
@@ -162,7 +163,7 @@ fn runBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !Benchmar
 
     // Initialize workers
     for (0..config.concurrent_clients) |_| {
-        var worker = ClientWorker.init(allocator, config);
+        const worker = ClientWorker.init(allocator, config);
         try workers.append(worker);
     }
 
@@ -201,23 +202,25 @@ fn runBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !Benchmar
     };
 }
 
-fn outputResults(allocator: std.mem.Allocator, results: BenchmarkResults, format: enum { json, text }) !void {
+fn outputResults(allocator: std.mem.Allocator, results: BenchmarkResults, format: OutputFormat) !void {
     switch (format) {
         .json => {
-            const json_string = try json.stringifyAlloc(allocator, results, .{ .whitespace = .{.indent = .{.space = 2}} });
+            const json_string = try json.Stringify.valueAlloc(allocator, results, .{
+                .whitespace = .indent_2,
+            });
             defer allocator.free(json_string);
             std.log.info("Benchmark Results (JSON):\n{s}", .{json_string});
         },
         .text => {
-            std.log.info("Benchmark Results:");
-            std.log.info("==================");
+            std.log.info("Benchmark Results:", .{});
+            std.log.info("==================", .{});
             std.log.info("Total Requests: {}", .{results.total_requests});
             std.log.info("Successful: {}", .{results.successful_requests});
             std.log.info("Failed: {}", .{results.failed_requests});
             std.log.info("Error Rate: {d:.2}%", .{results.error_rate * 100});
             std.log.info("Total Duration: {d:.2}ms", .{results.total_duration_ms});
             std.log.info("Requests/sec: {d:.2}", .{results.requests_per_second});
-            std.log.info("Latency Stats:");
+            std.log.info("Latency Stats:", .{});
             std.log.info("  Min: {d:.2}ms", .{results.latency_stats.min_ms});
             std.log.info("  Max: {d:.2}ms", .{results.latency_stats.max_ms});
             std.log.info("  Avg: {d:.2}ms", .{results.latency_stats.avg_ms});
@@ -227,9 +230,9 @@ fn outputResults(allocator: std.mem.Allocator, results: BenchmarkResults, format
     }
 }
 
-fn parseArgs(allocator: std.mem.Allocator) !struct { config: BenchmarkConfig, output_format: enum { json, text } } {
+fn parseArgs(allocator: std.mem.Allocator) !struct { config: BenchmarkConfig, output_format: OutputFormat } {
     var config = BenchmarkConfig{};
-    var output_format: enum { json, text } = .text;
+    var output_format: OutputFormat = .text;
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -268,17 +271,17 @@ fn parseArgs(allocator: std.mem.Allocator) !struct { config: BenchmarkConfig, ou
 }
 
 fn printUsage() void {
-    std.log.info("gRPC-zig Benchmark Tool");
-    std.log.info("Usage: benchmark [options]");
-    std.log.info("");
-    std.log.info("Options:");
-    std.log.info("  --host <host>       Server host (default: localhost)");
-    std.log.info("  --port <port>       Server port (default: 50051)");
-    std.log.info("  --requests <n>      Number of requests per client (default: 1000)");
-    std.log.info("  --clients <n>       Number of concurrent clients (default: 10)");
-    std.log.info("  --size <bytes>      Request payload size (default: 1024)");
-    std.log.info("  --output <format>   Output format: text|json (default: text)");
-    std.log.info("  --help              Show this help message");
+    std.log.info("gRPC-zig Benchmark Tool", .{});
+    std.log.info("Usage: benchmark [options]", .{});
+    std.log.info("", .{});
+    std.log.info("Options:", .{});
+    std.log.info("  --host <host>       Server host (default: localhost)", .{});
+    std.log.info("  --port <port>       Server port (default: 50051)", .{});
+    std.log.info("  --requests <n>      Number of requests per client (default: 1000)", .{});
+    std.log.info("  --clients <n>       Number of concurrent clients (default: 10)", .{});
+    std.log.info("  --size <bytes>      Request payload size (default: 1024)", .{});
+    std.log.info("  --output <format>   Output format: text|json (default: text)", .{});
+    std.log.info("  --help              Show this help message", .{});
 }
 
 // Simple benchmark handler for testing
@@ -297,8 +300,8 @@ pub fn main() !void {
     const config = parsed.config;
     const output_format = parsed.output_format;
 
-    std.log.info("gRPC-zig Benchmark Tool");
-    std.log.info("Configuration:");
+    std.log.info("gRPC-zig Benchmark Tool", .{});
+    std.log.info("Configuration:", .{});
     std.log.info("  Host: {s}:{}", .{ config.host, config.port });
     std.log.info("  Requests per client: {}", .{config.num_requests});
     std.log.info("  Concurrent clients: {}", .{config.concurrent_clients});

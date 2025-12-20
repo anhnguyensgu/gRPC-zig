@@ -42,23 +42,33 @@ pub const Frame = struct {
     }
 
     pub fn encode(self: Frame, writer: anytype) !void {
-        try writer.writeIntBig(u24, self.length);
-        try writer.writeIntBig(u8, @intFromEnum(self.type));
-        try writer.writeIntBig(u8, self.flags);
-        try writer.writeIntBig(u32, self.stream_id);
+        var header: [9]u8 = undefined;
+        std.mem.writeInt(u24, header[0..3], self.length, .big);
+        header[3] = @intFromEnum(self.type);
+        header[4] = self.flags;
+        const stream_bits: u32 = @intCast(self.stream_id);
+        std.mem.writeInt(u32, header[5..9], stream_bits, .big);
+
+        try writer.writeAll(&header);
         try writer.writeAll(self.payload);
     }
 
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !Frame {
         var frame = try Frame.init(allocator);
-        frame.length = try reader.readIntBig(u24);
-        frame.type = @enumFromInt(try reader.readIntBig(u8));
-        frame.flags = try reader.readIntBig(u8);
-        frame.stream_id = @intCast(try reader.readIntBig(u32));
-        
-        frame.payload = try allocator.alloc(u8, frame.length);
-        _ = try reader.readAll(frame.payload);
-        
+
+        var header: [9]u8 = undefined;
+        try reader.readSliceAll(&header);
+
+        frame.length = std.mem.readInt(u24, header[0..3], .big);
+        frame.type = @enumFromInt(header[3]);
+        frame.flags = header[4];
+        const raw_stream_id = std.mem.readInt(u32, header[5..9], .big);
+        frame.stream_id = @intCast(raw_stream_id & 0x7fff_ffff);
+
+        const payload = try allocator.alloc(u8, frame.length);
+        try reader.readSliceAll(payload);
+        frame.payload = payload;
+
         return frame;
     }
 };

@@ -1,6 +1,4 @@
 const std = @import("std");
-const spice = @import("spice");
-const proto = @import("proto/service.zig");
 const transport = @import("transport.zig");
 const compression = @import("features/compression.zig");
 const auth = @import("features/auth.zig");
@@ -51,6 +49,7 @@ pub const GrpcClient = struct {
     }
 
     pub fn call(self: *GrpcClient, method: []const u8, request: []const u8, compression_alg: compression.Compression.Algorithm) ![]u8 {
+        _ = method;
         // Add auth token if available
         var headers = std.StringHashMap([]const u8).init(self.allocator);
         defer headers.deinit();
@@ -65,10 +64,27 @@ pub const GrpcClient = struct {
         const compressed = try self.compression.compress(request, compression_alg);
         defer self.allocator.free(compressed);
 
-        try self.transport.writeMessage(compressed);
-        const response_bytes = try self.transport.readMessage();
-        
+        try self.transport.writeMessage(&headers, compressed, compression_alg);
+        var response = try self.transport.readMessage();
+        defer response.deinit();
+
         // Decompress response
-        return self.compression.decompress(response_bytes, compression_alg);
+        return self.compression.decompress(response.data, response.compression_algorithm);
     }
 };
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var client = try GrpcClient.init(allocator, "localhost", 50051);
+    defer client.deinit();
+
+    try client.setAuth("secret-key");
+
+    const response = try client.call("SayHello", "World", .none);
+    defer allocator.free(response);
+
+    std.debug.print("Response: {s}\n", .{response});
+}
