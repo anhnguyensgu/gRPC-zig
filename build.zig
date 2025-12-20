@@ -11,18 +11,30 @@ pub fn build(b: *std.Build) void {
         .module = spice_mod,
     };
 
-    // Server executable
-    const server_module = b.createModule(.{
+    // Server library module
+    const server_lib_module = b.createModule(.{
         .root_source_file = b.path("src/server.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{spice_import},
         .link_libc = true,
     });
-    server_module.linkSystemLibrary("z", .{});
+    server_lib_module.linkSystemLibrary("z", .{});
+
+    // Server executable
+    const server_root_module = b.createModule(.{
+        .root_source_file = b.path("src/server_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "server", .module = server_lib_module },
+        },
+        .link_libc = true,
+    });
+    server_root_module.linkSystemLibrary("z", .{});
     const server = b.addExecutable(.{
         .name = "grpc-server",
-        .root_module = server_module,
+        .root_module = server_root_module,
     });
     b.installArtifact(server);
 
@@ -72,7 +84,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             spice_import,
-            .{ .name = "server", .module = server_module },
+            .{ .name = "server", .module = server_lib_module },
         },
         .link_libc = true,
     });
