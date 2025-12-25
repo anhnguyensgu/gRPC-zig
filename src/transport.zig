@@ -166,18 +166,37 @@ pub const Transport = struct {
         var writer = self.stream.writer(self.write_buf);
         try settings_frame.encode(&writer.interface);
         try writer.interface.flush();
+
+        // Read and validate peer preface and SETTINGS.
+        var reader = self.stream.reader(self.read_buf);
+        var preface_buf: [http2.connection.Connection.PREFACE.len]u8 = undefined;
+        try reader.interface().readSliceAll(&preface_buf);
+        if (!std.mem.eql(u8, preface_buf[0..], http2.connection.Connection.PREFACE)) {
+            return TransportError.Http2Error;
+        }
+
+        var peer_settings = try http2.frame.Frame.decode(reader.interface(), self.allocator);
+        defer peer_settings.deinit(self.allocator);
+        if (peer_settings.type != .SETTINGS) {
+            return TransportError.Http2Error;
+        }
     }
 
     pub fn readMessage(self: *Transport) !Message {
         var reader = self.stream.reader(self.read_buf);
-        var frame = try http2.frame.Frame.decode(reader.interface(), self.allocator);
-        defer frame.deinit(self.allocator);
+        while (true) {
+            var frame = http2.frame.Frame.decode(reader.interface(), self.allocator) catch |err| switch (err) {
+                error.EndOfStream, error.ReadFailed => return TransportError.ConnectionClosed,
+                else => return err,
+            };
+            defer frame.deinit(self.allocator);
 
-        if (frame.type == .DATA) {
-            return try self.deserializeMessage(frame.payload);
+            switch (frame.type) {
+                .DATA => return try self.deserializeMessage(frame.payload),
+                .SETTINGS, .PING, .WINDOW_UPDATE => continue,
+                else => return TransportError.Http2Error,
+            }
         }
-
-        return TransportError.Http2Error;
     }
 
     pub fn writeMessage(self: *Transport, headers: *const std.StringHashMap([]const u8), message: []const u8, compression_alg: compression.Compression.Algorithm) !void {
@@ -185,7 +204,6 @@ pub const Transport = struct {
         defer data_frame.deinit(self.allocator);
 
         const encoded = try self.serializeMessage(headers, message, compression_alg);
-        defer self.allocator.free(encoded);
 
         data_frame.type = .DATA;
         data_frame.flags = http2.frame.FrameFlags.END_STREAM;

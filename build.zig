@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     });
     server_lib_module.linkSystemLibrary("z", .{});
 
-    // Server executable
+    // Server module
     const server_root_module = b.createModule(.{
         .root_source_file = b.path("src/server_main.zig"),
         .target = target,
@@ -32,13 +32,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     server_root_module.linkSystemLibrary("z", .{});
-    const server = b.addExecutable(.{
-        .name = "grpc-server",
-        .root_module = server_root_module,
-    });
-    b.installArtifact(server);
 
-    // Client executable
+    // Client module
     const client_module = b.createModule(.{
         .root_source_file = b.path("src/client.zig"),
         .target = target,
@@ -47,11 +42,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     client_module.linkSystemLibrary("z", .{});
-    const client = b.addExecutable(.{
-        .name = "grpc-client",
-        .root_module = client_module,
-    });
-    b.installArtifact(client);
 
     // Benchmark executable
     const benchmark_module = b.createModule(.{

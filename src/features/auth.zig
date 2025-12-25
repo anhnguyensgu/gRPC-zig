@@ -46,7 +46,8 @@ pub const Auth = struct {
         var expected_signature: [crypto.auth.hmac.sha2.HmacSha256.mac_length]u8 = undefined;
         hash.final(&expected_signature);
 
-        if (!std.mem.eql(u8, signature, &expected_signature)) {
+        const expected_hex = std.fmt.bytesToHex(expected_signature, .lower);
+        if (!std.mem.eql(u8, signature, expected_hex[0..])) {
             return AuthError.InvalidToken;
         }
     }
@@ -77,6 +78,16 @@ pub const Auth = struct {
         try token.appendSlice(header_json);
         try token.append('.');
         try token.appendSlice(payload_json);
+        try token.append('.');
+
+        var hash = crypto.auth.hmac.sha2.HmacSha256.init(self.secret_key);
+        hash.update(header_json);
+        hash.update(".");
+        hash.update(payload_json);
+        var signature: [crypto.auth.hmac.sha2.HmacSha256.mac_length]u8 = undefined;
+        hash.final(&signature);
+        const sig_hex = std.fmt.bytesToHex(signature, .lower);
+        try token.appendSlice(sig_hex[0..]);
 
         return token.toOwnedSlice();
     }

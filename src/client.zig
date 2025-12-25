@@ -12,9 +12,8 @@ pub const GrpcClient = struct {
     auth: ?auth.Auth,
 
     pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !GrpcClient {
-        const address = try std.net.Address.parseIp(host, port);
-        const connection = try std.net.tcpConnectToAddress(address);
-        
+        const connection = try std.net.tcpConnectToHost(allocator, host, port);
+
         return GrpcClient{
             .allocator = allocator,
             .transport = try transport.Transport.init(allocator, connection),
@@ -54,9 +53,11 @@ pub const GrpcClient = struct {
         var headers = std.StringHashMap([]const u8).init(self.allocator);
         defer headers.deinit();
 
+        var auth_token: ?[]u8 = null;
+        defer if (auth_token) |token| self.allocator.free(token);
         if (self.auth) |*auth_client| {
             const token = try auth_client.generateToken("client", 3600);
-            defer self.allocator.free(token);
+            auth_token = token;
             try headers.put("authorization", token);
         }
 
@@ -72,19 +73,3 @@ pub const GrpcClient = struct {
         return self.compression.decompress(response.data, response.compression_algorithm);
     }
 };
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var client = try GrpcClient.init(allocator, "localhost", 50051);
-    defer client.deinit();
-
-    try client.setAuth("secret-key");
-
-    const response = try client.call("SayHello", "World", .none);
-    defer allocator.free(response);
-
-    std.debug.print("Response: {s}\n", .{response});
-}
