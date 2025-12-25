@@ -10,6 +10,12 @@ pub fn build(b: *std.Build) void {
         .name = "spice",
         .module = spice_mod,
     };
+    const protobuf_dep = b.dependency("protobuf", .{});
+    const protobuf_mod = protobuf_dep.module("protobuf");
+    const protobuf_import: std.Build.Module.Import = .{
+        .name = "protobuf",
+        .module = protobuf_mod,
+    };
 
     // Server library module
     const server_lib_module = b.createModule(.{
@@ -91,6 +97,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             spice_import,
+            protobuf_import,
             .{ .name = "client", .module = client_module },
         },
         .link_libc = true,

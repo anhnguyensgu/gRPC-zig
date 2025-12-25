@@ -33,6 +33,11 @@ pub const Message = struct {
     }
 };
 
+pub const Role = enum {
+    client,
+    server,
+};
+
 pub const Transport = struct {
     stream: net.Stream,
     read_buf: []u8,
@@ -40,7 +45,7 @@ pub const Transport = struct {
     allocator: std.mem.Allocator,
     http2_conn: ?http2.connection.Connection,
 
-    pub fn init(allocator: std.mem.Allocator, stream: net.Stream) !Transport {
+    pub fn init(allocator: std.mem.Allocator, stream: net.Stream, role: Role) !Transport {
         var transport = Transport{
             .stream = stream,
             .read_buf = try allocator.alloc(u8, 1024 * 64),
@@ -51,7 +56,7 @@ pub const Transport = struct {
 
         // Initialize HTTP/2 connection
         transport.http2_conn = try http2.connection.Connection.init(allocator);
-        try transport.setupHttp2();
+        try transport.setupHttp2(role);
 
         return transport;
     }
@@ -150,31 +155,35 @@ pub const Transport = struct {
         self.stream.close();
     }
 
-    fn setupHttp2(self: *Transport) !void {
-        // Send HTTP/2 connection preface
-        _ = try self.stream.write(http2.connection.Connection.PREFACE);
+    fn setupHttp2(self: *Transport, role: Role) !void {
+        var reader = self.stream.reader(self.read_buf);
+        var writer = self.stream.writer(self.write_buf);
 
-        // Send initial SETTINGS frame
+        if (role == .client) {
+            // Client sends the HTTP/2 connection preface.
+            try writer.interface.writeAll(http2.connection.Connection.PREFACE);
+        } else {
+            // Server expects the client preface.
+            var preface_buf: [http2.connection.Connection.PREFACE.len]u8 = undefined;
+            try reader.interface().readSliceAll(&preface_buf);
+            if (!std.mem.eql(u8, preface_buf[0..], http2.connection.Connection.PREFACE)) {
+                return TransportError.Http2Error;
+            }
+        }
+
+        // Both sides send an initial SETTINGS frame.
         var settings_frame = try http2.frame.Frame.init(self.allocator);
         defer settings_frame.deinit(self.allocator);
 
         settings_frame.type = .SETTINGS;
         settings_frame.flags = 0;
         settings_frame.stream_id = 0;
-        // Add your settings here
+        // Add your settings here.
 
-        var writer = self.stream.writer(self.write_buf);
         try settings_frame.encode(&writer.interface);
         try writer.interface.flush();
 
-        // Read and validate peer preface and SETTINGS.
-        var reader = self.stream.reader(self.read_buf);
-        var preface_buf: [http2.connection.Connection.PREFACE.len]u8 = undefined;
-        try reader.interface().readSliceAll(&preface_buf);
-        if (!std.mem.eql(u8, preface_buf[0..], http2.connection.Connection.PREFACE)) {
-            return TransportError.Http2Error;
-        }
-
+        // Read peer SETTINGS.
         var peer_settings = try http2.frame.Frame.decode(reader.interface(), self.allocator);
         defer peer_settings.deinit(self.allocator);
         if (peer_settings.type != .SETTINGS) {

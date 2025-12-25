@@ -16,7 +16,7 @@ pub const GrpcClient = struct {
 
         return GrpcClient{
             .allocator = allocator,
-            .transport = try transport.Transport.init(allocator, connection),
+            .transport = try transport.Transport.init(allocator, connection, .client),
             .compression = compression.Compression.init(allocator),
             .auth = null,
         };

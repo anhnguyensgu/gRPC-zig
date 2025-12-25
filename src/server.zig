@@ -16,10 +16,14 @@ pub const GrpcServer = struct {
     server: std.net.Server,
     handlers: ArrayList(Handler),
     compression: compression.Compression,
-    auth: auth.Auth,
+    auth: ?auth.Auth,
     health_check: health.HealthCheck,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, secret_key: []const u8) !GrpcServer {
+        var internal_auth: ?auth.Auth = null;
+        if (secret_key.len > 0) {
+            internal_auth = auth.Auth.init(allocator, secret_key);
+        }
         const address = try std.net.Address.parseIp("127.0.0.1", port);
         return GrpcServer{
             .allocator = allocator,
@@ -27,7 +31,7 @@ pub const GrpcServer = struct {
             .server = try std.net.Address.listen(address, .{}),
             .handlers = ArrayList(Handler).init(allocator),
             .compression = compression.Compression.init(allocator),
-            .auth = auth.Auth.init(allocator, secret_key),
+            .auth = internal_auth,
             .health_check = health.HealthCheck.init(allocator),
         };
     }
@@ -49,7 +53,7 @@ pub const GrpcServer = struct {
     }
 
     fn handleConnection(self: *GrpcServer, conn: std.net.Server.Connection) !void {
-        var trans = try transport.Transport.init(self.allocator, conn.stream);
+        var trans = try transport.Transport.init(self.allocator, conn.stream, .server);
         defer trans.deinit();
 
         while (true) {
@@ -59,7 +63,10 @@ pub const GrpcServer = struct {
             };
             defer message.deinit();
 
-            try self.auth.verifyToken(message.headers.get("authorization") orelse "");
+            if (self.auth) |internal_auth| {
+                var a = internal_auth;
+                try a.verifyToken(message.headers.get("authorization") orelse "");
+            }
 
             const decompressed = try self.compression.decompress(message.data, message.compression_algorithm);
             defer self.allocator.free(decompressed);
