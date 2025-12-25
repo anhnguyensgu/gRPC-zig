@@ -3,20 +3,20 @@
 This library is not yet wire-compatible with gRPC. Below is the checklist of gaps to close.
 
 ## Transport & HTTP/2
-- [ ] Send full HTTP/2 client/server preface and SETTINGS; honor peer SETTINGS.
-- [ ] Use dynamic stream IDs per RPC; support concurrent streams.
+- [x] Send HTTP/2 client/server preface and SETTINGS; respond to peer SETTINGS with ACK.
+- [~] Use dynamic stream IDs per RPC; support concurrent streams. (Client uses incrementing stream IDs.) Remaining: server-side stream tracking, true concurrent streams, stream ID reuse rules.
 - [ ] Implement flow control (WINDOW_UPDATE), PING/PONG, GOAWAY handling.
 - [ ] Use TLS with ALPN `h2` for production interop.
 
 ## Headers & Routing
-- [ ] Emit/parse required headers: `:method POST`, `:scheme`, `:authority`, `:path=/pkg.Service/Method`, `content-type: application/grpc`, `te: trailers`.
-- [ ] Support optional headers: `grpc-timeout`, `grpc-encoding`, `grpc-accept-encoding`, `user-agent`, auth metadata.
+- [~] Emit required client headers (`:method`, `:scheme`, `:authority`, `:path`, `content-type`, `te`); parse response headers/trailers. Remaining: server-side header parsing/validation and request routing via `:path`.
+- [~] Support optional headers: `grpc-timeout`, `grpc-encoding`, `grpc-accept-encoding`, `user-agent`, auth metadata. Remaining: `grpc-timeout`, auth metadata, binary metadata handling.
 - [ ] Route RPCs by `:path` rather than custom envelopes.
 
 ## Message Framing
-- [ ] Use gRPC message envelope: 1-byte compressed flag + 4-byte big-endian length before payload.
+- [x] Use gRPC message envelope: 1-byte compressed flag + 4-byte big-endian length before payload.
 - [ ] Allow multiple messages per stream for streaming RPCs.
-- [ ] Integrate framing with HTTP/2 DATA frames (no custom transport envelope).
+- [~] Integrate framing with HTTP/2 DATA frames (no custom transport envelope). Remaining: server-side gRPC framing (remove custom transport envelope).
 
 ## Compression
 - [ ] Negotiate compression via `grpc-encoding`/`grpc-accept-encoding`.
@@ -24,7 +24,7 @@ This library is not yet wire-compatible with gRPC. Below is the checklist of gap
 - [ ] Compress/decompress only the framed message bytes, not headers/trailers.
 
 ## Trailers & Status
-- [ ] Terminate RPCs with HTTP/2 trailers carrying `grpc-status` and optional `grpc-message`, `grpc-status-details-bin`.
+- [~] Terminate RPCs with HTTP/2 trailers carrying `grpc-status` and optional `grpc-message`, `grpc-status-details-bin`. Remaining: server trailer emission, `grpc-status-details-bin` handling.
 - [ ] Map transport errors to appropriate HTTP/2 status and grpc-status codes.
 
 ## Metadata
