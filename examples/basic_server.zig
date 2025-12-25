@@ -6,7 +6,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var server = try GrpcServer.init(allocator, 50051, "secret-key");
+    var server = try GrpcServer.init(allocator, 50051, "");
     defer server.deinit();
 
     // Register handlers

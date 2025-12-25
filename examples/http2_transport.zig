@@ -15,7 +15,7 @@ pub fn main() !void {
     defer stream.close();
 
     // Initialize transport with HTTP/2
-    var trans = try transport.Transport.init(allocator, stream);
+    var trans = try transport.Transport.init(allocator, stream, .client);
     defer trans.deinit();
 
     // Send a message
