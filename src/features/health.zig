@@ -19,6 +19,10 @@ pub const HealthCheck = struct {
     }
 
     pub fn deinit(self: *HealthCheck) void {
+        var it = self.status.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
         self.status.deinit();
     }
 

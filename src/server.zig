@@ -1,10 +1,8 @@
 const std = @import("std");
-const spice = @import("spice");
-const proto = @import("proto/service.zig");
+const ArrayList = std.array_list.Managed;
 const transport = @import("transport.zig");
 const compression = @import("features/compression.zig");
 const auth = @import("features/auth.zig");
-const streaming = @import("features/streaming.zig");
 const health = @import("features/health.zig");
 
 pub const Handler = struct {
@@ -15,21 +13,25 @@ pub const Handler = struct {
 pub const GrpcServer = struct {
     allocator: std.mem.Allocator,
     address: std.net.Address,
-    server: std.net.StreamServer,
-    handlers: std.ArrayList(Handler),
+    server: std.net.Server,
+    handlers: ArrayList(Handler),
     compression: compression.Compression,
-    auth: auth.Auth,
+    auth: ?auth.Auth,
     health_check: health.HealthCheck,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, secret_key: []const u8) !GrpcServer {
+        var internal_auth: ?auth.Auth = null;
+        if (secret_key.len > 0) {
+            internal_auth = auth.Auth.init(allocator, secret_key);
+        }
         const address = try std.net.Address.parseIp("127.0.0.1", port);
         return GrpcServer{
             .allocator = allocator,
             .address = address,
-            .server = std.net.StreamServer.init(.{}),
-            .handlers = std.ArrayList(Handler).init(allocator),
+            .server = try std.net.Address.listen(address, .{}),
+            .handlers = ArrayList(Handler).init(allocator),
             .compression = compression.Compression.init(allocator),
-            .auth = auth.Auth.init(allocator, secret_key),
+            .auth = internal_auth,
             .health_check = health.HealthCheck.init(allocator),
         };
     }
@@ -41,9 +43,8 @@ pub const GrpcServer = struct {
     }
 
     pub fn start(self: *GrpcServer) !void {
-        try self.server.listen(self.address);
         try self.health_check.setStatus("grpc.health.v1.Health", .SERVING);
-        std.log.info("Server listening on {}", .{self.address});
+        std.log.info("Server listening on {any}", .{self.server.listen_address});
 
         while (true) {
             const connection = try self.server.accept();
@@ -51,43 +52,33 @@ pub const GrpcServer = struct {
         }
     }
 
-    fn handleConnection(self: *GrpcServer, conn: std.net.StreamServer.Connection) !void {
-        var trans = try transport.Transport.init(self.allocator, conn.stream);
+    fn handleConnection(self: *GrpcServer, conn: std.net.Server.Connection) !void {
+        var trans = try transport.Transport.init(self.allocator, conn.stream, .server);
         defer trans.deinit();
 
-        // Setup streaming
-        var message_stream = streaming.MessageStream.init(self.allocator, 1024);
-        defer message_stream.deinit();
-
         while (true) {
-            const message = trans.readMessage() catch |err| switch (err) {
+            var message = trans.readMessage() catch |err| switch (err) {
                 error.ConnectionClosed => break,
                 else => return err,
             };
+            defer message.deinit();
 
-            // Verify auth token from headers
-            try self.auth.verifyToken(message.headers.get("authorization") orelse "");
+            if (self.auth) |internal_auth| {
+                var a = internal_auth;
+                try a.verifyToken(message.headers.get("authorization") orelse "");
+            }
 
-            // Decompress if needed
-            const decompressed = try self.compression.decompress(
-                message.data,
-                message.compression_algorithm,
-            );
+            const decompressed = try self.compression.decompress(message.data, message.compression_algorithm);
             defer self.allocator.free(decompressed);
 
-            // Process message
             for (self.handlers.items) |handler| {
                 const response = try handler.handler_fn(decompressed, self.allocator);
                 defer self.allocator.free(response);
 
-                // Compress response
-                const compressed = try self.compression.compress(
-                    response,
-                    message.compression_algorithm,
-                );
-                defer self.allocator.free(compressed);
+                var response_headers = std.StringHashMap([]const u8).init(self.allocator);
+                defer response_headers.deinit();
 
-                try trans.writeMessage(compressed);
+                try trans.writeMessage(&response_headers, response, message.compression_algorithm);
             }
         }
     }

@@ -1,15 +1,7 @@
-.{
-    .name = .grpc_zig,
-    .version = "0.1.0",
-    .dependencies = .{
-        .spice = .{
-            .url = "https://github.com/judofyr/spice/archive/refs/heads/main.tar.gz",
-            .hash = "spice-0.0.0-3FtxfM67AADgcc5i5rJfewMfbutQY7DMTyNlZblzW-6p"
+.{ .name = .grpc_zig, .version = "0.1.0", .fingerprint = 0xbcaa61f272b21f31, .dependencies = .{
+    .spice = .{ .url = "https://github.com/judofyr/spice/archive/refs/heads/main.tar.gz", .hash = "spice-0.0.0-3FtxfEq9AAASAwEKfAmQ4uDhc9vkuwHrRkjEeEYx1aCP" },
+    .protobuf = .{
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/refs/heads/master.tar.gz",
+            .hash = "protobuf-3.0.0-0e82alnSKAD4lJettI9uUAM148s_36NH5SP7ZVjaAPkg",
         },
-    },
-    .paths = .{
-        "build.zig",
-        "build.zig.zon",
-        "src"
-    }
-}
+}, .paths = .{ "build.zig", "build.zig.zon", "src" } }

@@ -1,6 +1,4 @@
 const std = @import("std");
-const spice = @import("spice");
-const proto = @import("proto/service.zig");
 const transport = @import("transport.zig");
 const compression = @import("features/compression.zig");
 const auth = @import("features/auth.zig");
@@ -12,16 +10,19 @@ pub const GrpcClient = struct {
     transport: transport.Transport,
     compression: compression.Compression,
     auth: ?auth.Auth,
+    host: []const u8,
+    port: u16,
 
     pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16) !GrpcClient {
-        const address = try std.net.Address.parseIp(host, port);
-        const connection = try std.net.tcpConnectToAddress(address);
-        
+        const connection = try std.net.tcpConnectToHost(allocator, host, port);
+
         return GrpcClient{
             .allocator = allocator,
-            .transport = try transport.Transport.init(allocator, connection),
+            .transport = try transport.Transport.init(allocator, connection, .client),
             .compression = compression.Compression.init(allocator),
             .auth = null,
+            .host = host,
+            .port = port,
         };
     }
 
@@ -51,13 +52,16 @@ pub const GrpcClient = struct {
     }
 
     pub fn call(self: *GrpcClient, method: []const u8, request: []const u8, compression_alg: compression.Compression.Algorithm) ![]u8 {
+        _ = method;
         // Add auth token if available
         var headers = std.StringHashMap([]const u8).init(self.allocator);
         defer headers.deinit();
 
+        var auth_token: ?[]u8 = null;
+        defer if (auth_token) |token| self.allocator.free(token);
         if (self.auth) |*auth_client| {
             const token = try auth_client.generateToken("client", 3600);
-            defer self.allocator.free(token);
+            auth_token = token;
             try headers.put("authorization", token);
         }
 
@@ -65,10 +69,23 @@ pub const GrpcClient = struct {
         const compressed = try self.compression.compress(request, compression_alg);
         defer self.allocator.free(compressed);
 
-        try self.transport.writeMessage(compressed);
-        const response_bytes = try self.transport.readMessage();
-        
+        try self.transport.writeMessage(&headers, compressed, compression_alg);
+        var response = try self.transport.readMessage();
+        defer response.deinit();
+
         // Decompress response
-        return self.compression.decompress(response_bytes, compression_alg);
+        return self.compression.decompress(response.data, response.compression_algorithm);
+    }
+
+    pub fn callGrpcUnary(self: *GrpcClient, path: []const u8, request: []const u8) ![]u8 {
+        const authority = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ self.host, self.port });
+        defer self.allocator.free(authority);
+
+        const stream_id = try self.transport.writeGrpcRequest(path, authority, "http", request);
+        return self.transport.readGrpcResponse(stream_id);
+    }
+
+    pub fn lastGrpcStatus(self: *GrpcClient) ?transport.GrpcStatusView {
+        return self.transport.lastGrpcStatus();
     }
 };

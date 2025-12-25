@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArrayList = std.array_list.Managed;
 
 pub const StreamError = error{
     Closed,
@@ -11,13 +12,13 @@ pub const StreamingMessage = struct {
 };
 
 pub const MessageStream = struct {
-    buffer: std.ArrayList(StreamingMessage),
+    buffer: ArrayList(StreamingMessage),
     allocator: std.mem.Allocator,
     max_buffer_size: usize,
 
     pub fn init(allocator: std.mem.Allocator, max_buffer_size: usize) MessageStream {
         return .{
-            .buffer = std.ArrayList(StreamingMessage).init(allocator),
+            .buffer = ArrayList(StreamingMessage).init(allocator),
             .allocator = allocator,
             .max_buffer_size = max_buffer_size,
         };
